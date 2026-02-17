@@ -131,7 +131,7 @@ jobs:
             });
       
       - name: Upload Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: load-test-report
           path: |
@@ -149,7 +149,7 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Download Load Test Results
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: load-test-report
       
@@ -197,7 +197,7 @@ jobs:
           cat comparison-summary.md
       
       - name: Upload Comparison
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: comparison-report
           path: comparison-summary.md
