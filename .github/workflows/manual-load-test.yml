@@ -1,5 +1,6 @@
 name: Manual Load Test
 
+# Trigger manual load tests with customizable parameters
 on:
   workflow_dispatch:
     inputs:
