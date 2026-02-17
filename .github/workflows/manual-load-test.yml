@@ -1,0 +1,209 @@
+name: Manual Load Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      load_type:
+        description: 'Load test type'
+        required: true
+        default: 'baseline'
+        type: choice
+        options:
+          - baseline
+          - stress
+          - endurance
+      concurrent_requests:
+        description: 'Number of concurrent requests'
+        required: false
+        default: '100'
+      duration_seconds:
+        description: 'Test duration in seconds'
+        required: false
+        default: '60'
+
+env:
+  APP_ENGINE_URL: https://acs-stuttgart-2026-semester.ey.r.appspot.com
+  GCP_PROJECT_ID: acs-stuttgart-2026-semester
+
+jobs:
+  manual-load-test:
+    name: Manual Load Test - ${{ github.event.inputs.load_type }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Setup Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      
+      - name: Install autocannon
+        run: npm install -g autocannon
+      
+      - name: Get GKE IP
+        run: |
+          gcloud container clusters get-credentials gcp-compare-cluster --zone us-central1-a
+          GKE_IP=$(kubectl get svc gcp-compare-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "GKE_SERVICE_IP=$GKE_IP" >> $GITHUB_ENV
+      
+      - name: Display Test Configuration
+        run: |
+          echo "
+          ╔═══════════════════════════════════════════════════╗
+          ║          LOAD TEST CONFIGURATION                  ║
+          ╚═══════════════════════════════════════════════════╝
+          
+          Type: ${{ github.event.inputs.load_type }}
+          Concurrent Requests: ${{ github.event.inputs.concurrent_requests }}
+          Duration: ${{ github.event.inputs.duration_seconds }}s
+          
+          Endpoints:
+          - App Engine: ${{ env.APP_ENGINE_URL }}/
+          - GKE: http://${{ env.GKE_SERVICE_IP }}/
+          
+          "
+      
+      - name: Run Load Test - App Engine
+        id: ae-load
+        continue-on-error: true
+        run: |
+          echo "🧪 Testing App Engine..."
+          autocannon \
+            -c ${{ github.event.inputs.concurrent_requests }} \
+            -d ${{ github.event.inputs.duration_seconds }} \
+            -l \
+            ${{ env.APP_ENGINE_URL }}/ | tee ae-load-test.log
+      
+      - name: Run Load Test - GKE
+        id: gke-load
+        continue-on-error: true
+        run: |
+          echo "🧪 Testing GKE..."
+          autocannon \
+            -c ${{ github.event.inputs.concurrent_requests }} \
+            -d ${{ github.event.inputs.duration_seconds }} \
+            -l \
+            http://${{ env.GKE_SERVICE_IP }}/ | tee gke-load-test.log
+      
+      - name: Capture Metrics - App Engine
+        continue-on-error: true
+        run: |
+          echo "📊 Capturing App Engine metrics..."
+          gcloud monitoring time-series list \
+            --filter='metric.type="appengine.googleapis.com/http/server/request_count" AND resource.service="default"' \
+            --format='table(metric.labels.response_code,points[0].value.number_value)' > ae-metrics.txt 2>&1 || true
+          cat ae-metrics.txt
+      
+      - name: Capture Metrics - GKE
+        continue-on-error: true
+        run: |
+          echo "📊 Capturing GKE metrics..."
+          kubectl get pods -l app=gcp-compare -o wide > gke-pods.txt
+          kubectl top pods -l app=gcp-compare --no-headers > gke-pod-metrics.txt 2>&1 || true
+          cat gke-pods.txt
+          cat gke-pod-metrics.txt
+      
+      - name: Generate Test Report
+        run: |
+          cat > test-report.md << 'EOF'
+          # Load Test Report - ${{ github.event.inputs.load_type }}
+          
+          **Test Date**: $(date)
+          **Workflow Run**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          ## Test Configuration
+          
+          - **Type**: ${{ github.event.inputs.load_type }}
+          - **Concurrent Requests**: ${{ github.event.inputs.concurrent_requests }}
+          - **Duration**: ${{ github.event.inputs.duration_seconds }} seconds
+          - **Commit**: ${{ github.sha }}
+          
+          ## Results Summary
+          
+          | Platform | Status | Test Duration |
+          |----------|--------|---------------|
+          | App Engine | ${{ steps.ae-load.outcome }} | ${{ github.event.inputs.duration_seconds }}s |
+          | GKE | ${{ steps.gke-load.outcome }} | ${{ github.event.inputs.duration_seconds }}s |
+          
+          ## App Engine Results
+          
+          \`\`\`
+          $(cat ae-load-test.log 2>/dev/null || echo "See artifact for details")
+          \`\`\`
+          
+          ## GKE Results
+          
+          \`\`\`
+          $(cat gke-load-test.log 2>/dev/null || echo "See artifact for details")
+          \`\`\`
+          
+          ## Captured Metrics
+          
+          ### App Engine
+          \`\`\`
+          $(cat ae-metrics.txt 2>/dev/null || echo "Metrics not available")
+          \`\`\`
+          
+          ### GKE Pods
+          \`\`\`
+          $(cat gke-pods.txt 2>/dev/null || echo "Pod info not available")
+          \`\`\`
+          
+          ### GKE Pod Metrics
+          \`\`\`
+          $(cat gke-pod-metrics.txt 2>/dev/null || echo "Pod metrics not available")
+          \`\`\`
+          
+          ## Next Steps
+          
+          1. **View Full Metrics**: https://console.cloud.google.com/monitoring
+          2. **App Engine Metrics**: https://console.cloud.google.com/appengine/metrics
+          3. **GKE Workloads**: https://console.cloud.google.com/kubernetes/workloads
+          4. **Logs**: https://console.cloud.google.com/logs
+          
+          ## Notes
+          
+          - Metrics lag 30-60 seconds after load test completion
+          - Console auto-refresh must be enabled to see live updates
+          - Check scaling behavior (3-10 pods for GKE, 1-10 instances for App Engine)
+          
+          EOF
+          cat test-report.md
+      
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: load-test-results-${{ github.event.inputs.load_type }}
+          path: |
+            test-report.md
+            ae-load-test.log
+            gke-load-test.log
+            ae-metrics.txt
+            gke-pods.txt
+            gke-pod-metrics.txt
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "
+          ╔═══════════════════════════════════════════════════╗
+          ║          LOAD TEST COMPLETED                      ║
+          ╚═══════════════════════════════════════════════════╝
+          
+          ✅ Test Type: ${{ github.event.inputs.load_type }}
+          📊 Results available in artifacts
+          
+          📈 View live metrics:
+          - App Engine: https://console.cloud.google.com/appengine/metrics
+          - GKE: https://console.cloud.google.com/kubernetes/workloads
+          
+          ⏱️  Note: Metrics update every 30-60 seconds
+          
+          "

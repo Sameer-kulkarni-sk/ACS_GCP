@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gcp-compare-config
+  namespace: default
+  labels:
+    app: gcp-compare
+data:
+  # Application configuration
+  app-config.json: |
+    {
+      "name": "GCP Compare Project",
+      "version": "1.0.0",
+      "endpoints": {
+        "health": "/health",
+        "info": "/api/info",
+        "comparison": "/api/comparison",
+        "metrics": "/api/metrics"
+      }
+    }
+  
+  # Logging configuration
+  logging-config.json: |
+    {
+      "level": "info",
+      "format": "json",
+      "pretty": false
+    }

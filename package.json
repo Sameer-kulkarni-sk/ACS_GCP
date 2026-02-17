@@ -1,0 +1,22 @@
+{
+  "name": "gcp-compare-project",
+  "version": "1.0.0",
+  "description": "GCP Compare Project: Google Kubernetes Engine vs Google App Engine",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js",
+    "dev": "NODE_ENV=development node app.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "gae:local": "PORT=8080 PLATFORM=GAE DEPLOYMENT_TYPE='Google App Engine' npm start",
+    "gke:local": "PORT=8080 PLATFORM=GKE DEPLOYMENT_TYPE='Google Kubernetes Engine' npm start"
+  },
+  "keywords": ["gcp", "gke", "gae", "comparison", "kubernetes"],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}

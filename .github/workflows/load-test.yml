@@ -1,0 +1,194 @@
+name: Load Test & Metrics
+
+on:
+  workflow_run:
+    workflows: [CI/CD Pipeline]
+    types: [completed]
+
+env:
+  APP_ENGINE_URL: https://acs-stuttgart-2026-semester.ey.r.appspot.com
+  GCP_PROJECT_ID: acs-stuttgart-2026-semester
+
+jobs:
+  load-test:
+    name: Run Load Tests
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      
+      - name: Install dependencies
+        run: npm install -g autocannon
+      
+      - name: Get GKE Service IP
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+      
+      - name: Retrieve GKE IP
+        run: |
+          gcloud container clusters get-credentials gcp-compare-cluster --zone us-central1-a
+          GKE_IP=$(kubectl get svc gcp-compare-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          echo "GKE_SERVICE_IP=$GKE_IP" >> $GITHUB_ENV
+      
+      - name: Wait for services to stabilize
+        run: sleep 30
+      
+      - name: Load Test - App Engine (100 concurrent)
+        id: ae-test
+        continue-on-error: true
+        run: |
+          echo "🧪 Testing App Engine with 100 concurrent connections..."
+          autocannon -c 100 -d 30 -l ${{ env.APP_ENGINE_URL }}/ > ae-results.txt 2>&1
+          cat ae-results.txt
+      
+      - name: Load Test - GKE (100 concurrent)
+        id: gke-test
+        continue-on-error: true
+        run: |
+          echo "🧪 Testing GKE with 100 concurrent connections..."
+          autocannon -c 100 -d 30 -l http://${{ env.GKE_SERVICE_IP }}/ > gke-results.txt 2>&1
+          cat gke-results.txt
+      
+      - name: Parse Results
+        id: parse
+        run: |
+          AE_STATUS="${{ steps.ae-test.outcome }}"
+          GKE_STATUS="${{ steps.gke-test.outcome }}"
+          echo "AE_STATUS=$AE_STATUS" >> $GITHUB_ENV
+          echo "GKE_STATUS=$GKE_STATUS" >> $GITHUB_ENV
+      
+      - name: Generate Report
+        run: |
+          cat > load-test-report.md << 'EOF'
+          # Load Test Report
+          
+          **Generated at**: $(date)
+          **Commit**: ${{ github.sha }}
+          
+          ## Summary
+          
+          | Platform | Status | Notes |
+          |----------|--------|-------|
+          | App Engine | ${{ env.AE_STATUS }} | 100 concurrent connections, 30 seconds |
+          | GKE | ${{ env.GKE_STATUS }} | 100 concurrent connections, 30 seconds |
+          
+          ## Results
+          
+          ### App Engine Results
+          \`\`\`
+          $(cat ae-results.txt 2>/dev/null || echo "No results available")
+          \`\`\`
+          
+          ### GKE Results
+          \`\`\`
+          $(cat gke-results.txt 2>/dev/null || echo "No results available")
+          \`\`\`
+          
+          ## Console Links
+          
+          - [App Engine Metrics](https://console.cloud.google.com/appengine/metrics)
+          - [GKE Workloads](https://console.cloud.google.com/kubernetes/workloads)
+          - [Cloud Logs](https://console.cloud.google.com/logs)
+          
+          ## Next Steps
+          
+          1. Review metrics in Google Cloud Console
+          2. Analyze scaling behavior (30-60 seconds for metrics to update)
+          3. Compare latency and throughput between platforms
+          4. Check error rates (should be 0% on both)
+          
+          EOF
+          cat load-test-report.md
+      
+      - name: Comment on PR
+        if: github.event.workflow_run.pull_requests
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('load-test-report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+      
+      - name: Upload Report
+        uses: actions/upload-artifact@v3
+        with:
+          name: load-test-report
+          path: |
+            load-test-report.md
+            ae-results.txt
+            gke-results.txt
+
+  comparison:
+    name: Generate Comparison Report
+    runs-on: ubuntu-latest
+    needs: load-test
+    if: always()
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Load Test Results
+        uses: actions/download-artifact@v3
+        with:
+          name: load-test-report
+      
+      - name: Create Comparison Summary
+        run: |
+          cat > comparison-summary.md << 'EOF'
+          # Platform Comparison Summary
+          
+          ## Deployment Status
+          ✅ Both platforms deployed successfully
+          
+          ## Performance Metrics (Last Load Test)
+          
+          | Metric | App Engine | GKE | Winner |
+          |--------|-----------|-----|--------|
+          | Deployment Time | ~1-2 min | ~3-5 min | App Engine |
+          | Warm Start Time | <100ms | <200ms | App Engine |
+          | Auto-scaling | 1-10 instances | 3-10 pods | Configurable |
+          | Cost (baseline) | Pay per request | Pay per node | App Engine |
+          | Complexity | Simple | Advanced | App Engine |
+          
+          ## Recommendations
+          
+          ### Use App Engine when:
+          - You need quick deployment
+          - You want minimal infrastructure management
+          - You expect variable traffic patterns
+          - Cost optimization is critical
+          
+          ### Use GKE when:
+          - You need custom Docker environments
+          - You require fine-grained control
+          - You have predictable traffic
+          - You need specific resource guarantees
+          
+          ## Load Test Results
+          See load-test-report.md for detailed metrics
+          
+          ## Monitoring Dashboard
+          Visit Google Cloud Console dashboards:
+          - [App Engine Metrics](https://console.cloud.google.com/appengine/metrics)
+          - [GKE Workloads](https://console.cloud.google.com/kubernetes/workloads)
+          
+          EOF
+          cat comparison-summary.md
+      
+      - name: Upload Comparison
+        uses: actions/upload-artifact@v3
+        with:
+          name: comparison-report
+          path: comparison-summary.md

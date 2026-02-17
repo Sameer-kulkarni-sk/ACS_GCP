@@ -1,0 +1,22 @@
+runtime: nodejs22
+env: standard
+
+env_variables:
+  PLATFORM: "GAE"
+  DEPLOYMENT_TYPE: "Google App Engine"
+  NODE_ENV: "production"
+
+automatic_scaling:
+  min_instances: 1
+  max_instances: 10
+  standard_scheduler_settings:
+    target_cpu_utilization: 0.75
+    target_throughput_utilization: 0.75
+
+handlers:
+- url: /.*
+  script: auto
+
+# Security settings
+security_settings:
+  enforce_https: always

@@ -1,0 +1,10 @@
+runtime: nodejs22
+env: standard
+automatic_scaling:
+  min_instances: 1
+  max_instances: 10
+
+env_variables:
+  PLATFORM: "App Engine"
+  DEPLOYMENT_TYPE: "Google App Engine"
+  NODE_ENV: "production"

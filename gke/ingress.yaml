@@ -1,0 +1,51 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: gcp-compare-ingress
+  namespace: default
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "gcp-compare-ip"
+    networking.gke.io/managed-certificates: "gcp-compare-cert"
+    kubernetes.io/ingress.allow-http: "true"
+spec:
+  rules:
+  - host: gcp-compare.example.com
+    http:
+      paths:
+      - path: /*
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: gcp-compare-service
+            port:
+              number: 80
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: gcp-compare-backendconfig
+  namespace: default
+spec:
+  iap:
+    enabled: false
+  sessionAffinity:
+    affinityType: "CLIENT_IP"
+    affinityCookieTtlSec: 3600
+  healthChecks:
+  - name: gcp-compare-health
+  timeoutSec: 30
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeHealthCheck
+metadata:
+  name: gcp-compare-health
+  location: global
+spec:
+  checkIntervalSec: 10
+  timeoutSec: 5
+  healthyThreshold: 2
+  unhealthyThreshold: 2
+  httpHealthCheck:
+    port: 8080
+    requestPath: /health
