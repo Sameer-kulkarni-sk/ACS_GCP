@@ -114,6 +114,174 @@ async function fetchInstanceInfo() {
   }
 }
 
+async function fetchClusterStatus() {
+  try {
+    const response = await fetch('/api/cluster-status');
+    const data = await response.json();
+    displayClusterStatus(data);
+  } catch (error) {
+    console.error('Error fetching cluster status:', error);
+    const container = document.getElementById('cluster-status-container');
+    if (container) {
+      container.innerHTML = '<div class="cluster-platform-card"><p style="color: red;">Failed to fetch cluster status</p></div>';
+    }
+  }
+}
+
+function displayClusterStatus(data) {
+  const container = document.getElementById('cluster-status-container');
+  if (!container) return;
+
+  let html = '';
+
+  if (data.platform === 'GKE') {
+    // GKE Status
+    html = `
+      <div class="cluster-platform-card">
+        <span class="platform-label gke">🎯 Google Kubernetes Engine</span>
+        
+        <div class="cluster-info-grid">
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Cluster Name</span>
+            <div class="cluster-info-value">${data.cluster?.name || 'N/A'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Namespace</span>
+            <div class="cluster-info-value">${data.cluster?.namespace || 'default'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Zone</span>
+            <div class="cluster-info-value">${data.cluster?.zone || 'N/A'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">External IP</span>
+            <div class="cluster-info-value">${data.service?.externalIP || 'Pending'}</div>
+          </div>
+        </div>
+
+        <h3 style="margin-top: 1.5rem; margin-bottom: 1rem;">🖥️ Pods</h3>
+        ${data.pods && data.pods.length > 0 ? `
+          <div class="cluster-table-container">
+            <table class="cluster-table">
+              <thead>
+                <tr>
+                  <th>Pod Name</th>
+                  <th>Pod IP</th>
+                  <th>Node</th>
+                  <th>Node IP</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.pods.map(pod => {
+                  const node = data.nodes?.find(n => n.name === pod.nodeName);
+                  const statusClass = pod.status === 'Running' ? 'running' : 
+                                     pod.status === 'Pending' ? 'pending' : 'failed';
+                  return `
+                    <tr>
+                      <td>${pod.name}</td>
+                      <td>${pod.podIP}</td>
+                      <td>${pod.nodeName}</td>
+                      <td>${node?.internalIP || 'N/A'}</td>
+                      <td><span class="status-badge ${statusClass}">${pod.status}</span></td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : '<p style="color: var(--text-secondary);">No pods found</p>'}
+
+        <h3 style="margin-top: 1.5rem; margin-bottom: 1rem;">⚙️ Nodes</h3>
+        ${data.nodes && data.nodes.length > 0 ? `
+          <div class="cluster-table-container">
+            <table class="cluster-table">
+              <thead>
+                <tr>
+                  <th>Node Name</th>
+                  <th>Internal IP</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.nodes.map(node => `
+                  <tr>
+                    <td>${node.name}</td>
+                    <td>${node.internalIP}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : '<p style="color: var(--text-secondary);">No nodes found</p>'}
+
+        ${data.summary ? `
+          <div class="cluster-summary">
+            <div class="summary-stat">
+              <span class="summary-stat-value">${data.summary.totalPods}</span>
+              <div class="summary-stat-label">Total Pods</div>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat-value">${data.summary.readyPods}</span>
+              <div class="summary-stat-label">Running Pods</div>
+            </div>
+            <div class="summary-stat">
+              <span class="summary-stat-value">${data.summary.totalNodes}</span>
+              <div class="summary-stat-label">Total Nodes</div>
+            </div>
+          </div>
+        ` : ''}
+      </div>
+    `;
+  } else {
+    // GAE Status
+    html = `
+      <div class="cluster-platform-card">
+        <span class="platform-label gae">⚡ Google App Engine</span>
+        
+        <div class="cluster-warning">
+          <strong>ℹ️ Architecture Note:</strong> ${data.warning}
+        </div>
+
+        <div class="cluster-info-grid">
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Service Name</span>
+            <div class="cluster-info-value">${data.deployment?.serviceId || 'default'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Region</span>
+            <div class="cluster-info-value">${data.deployment?.region || 'N/A'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Version ID</span>
+            <div class="cluster-info-value">${data.deployment?.versionId || 'unknown'}</div>
+          </div>
+          <div class="cluster-info-item">
+            <span class="cluster-info-label">Deployment Type</span>
+            <div class="cluster-info-value">${data.deployment?.type || 'App Engine'}</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem; padding: 1.5rem; background: var(--secondary-color); color: white; border-radius: 0.5rem;">
+          <p><strong>Why Instance IPs Are Hidden:</strong></p>
+          <p style="margin-top: 0.5rem; font-size: 0.95rem;">
+            App Engine uses a managed load balancer to distribute traffic automatically across instances. 
+            Individual instance IPs are abstracted away, providing a simplified, fully-managed experience. 
+            You only need to interact with the single service endpoint.
+          </p>
+        </div>
+
+        <p style="margin-top: 1.5rem; text-align: center; color: var(--text-secondary);">
+          📊 <a href="${data.consoleUrl}" target="_blank" style="color: var(--secondary-color); text-decoration: none; font-weight: 600;">
+            View Metrics & Logs in Google Cloud Console
+          </a>
+        </p>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+}
+
 async function fetchHealth() {
   try {
     const response = await fetch('/health');
@@ -302,11 +470,14 @@ function initialize() {
   fetchComparison();
   fetchHealth();
   fetchInstanceInfo();
+  fetchClusterStatus();
 
   // Auto-refresh metrics every 5 seconds
   setInterval(fetchMetrics, 5000);
   // Auto-refresh instance info every 5 seconds
   setInterval(fetchInstanceInfo, 5000);
+  // Auto-refresh cluster status every 10 seconds
+  setInterval(fetchClusterStatus, 10000);
   // Auto-refresh health every 10 seconds
   setInterval(fetchHealth, 10000);
 

@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const os = require('os');
+const { execSync } = require('child_process');
 const app = express();
 
 // Simple metrics collection
@@ -257,6 +258,117 @@ app.get('/api/metrics', (req, res) => {
     loadDistribution: metrics.instanceRequests,
     totalRequests: metrics.requestCount
   });
+});
+
+// Cluster status endpoint
+app.get('/api/cluster-status', (req, res) => {
+  try {
+    const isKubernetes = process.env.KUBERNETES_SERVICE_HOST;
+    
+    if (!isKubernetes) {
+      // Not running in Kubernetes, return GAE-style info
+      return res.json({
+        platform: 'GAE',
+        warning: 'App Engine hides individual instance IPs behind a managed load balancer',
+        deployment: {
+          type: 'App Engine',
+          region: process.env.GAE_REGION || 'us-central1',
+          versionId: process.env.GAE_VERSION || 'unknown',
+          serviceId: process.env.GAE_SERVICE || 'default'
+        },
+        message: 'View detailed metrics and logs in Google Cloud Console',
+        consoleUrl: 'https://console.cloud.google.com/appengine'
+      });
+    }
+
+    // Running on GKE
+    const namespace = process.env.POD_NAMESPACE || 'default';
+    const clusterName = process.env.CLUSTER_NAME || 'gcp-compare-cluster';
+    
+    // Get pods
+    let pods = [];
+    try {
+      const podOutput = execSync(
+        `kubectl get pods -l app=gcp-compare-app -n ${namespace} -o jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.status.podIP}{"\\t"}{.spec.nodeName}{"\\t"}{.status.phase}{"\\n"}{end}'`,
+        { encoding: 'utf-8', timeout: 5000 }
+      ).trim();
+      
+      if (podOutput) {
+        pods = podOutput.split('\n').filter(line => line).map(line => {
+          const [name, podIP, nodeName, status] = line.split('\t');
+          return {
+            name: name || 'unknown',
+            podIP: podIP || 'N/A',
+            nodeName: nodeName || 'unknown',
+            status: status || 'unknown'
+          };
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching pods:', error.message);
+    }
+
+    // Get nodes and their IPs
+    let nodes = [];
+    try {
+      const nodeOutput = execSync(
+        `kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\\t"}{.status.addresses[?(@.type=="InternalIP")].address}{"\\n"}{end}'`,
+        { encoding: 'utf-8', timeout: 5000 }
+      ).trim();
+      
+      if (nodeOutput) {
+        nodes = nodeOutput.split('\n').filter(line => line).map(line => {
+          const [name, internalIP] = line.split('\t');
+          return {
+            name: name || 'unknown',
+            internalIP: internalIP || 'N/A'
+          };
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching nodes:', error.message);
+    }
+
+    // Get service external IP
+    let serviceIP = 'Pending';
+    try {
+      const serviceOutput = execSync(
+        `kubectl get service gcp-compare-service -n ${namespace} -o jsonpath='{.status.loadBalancer.ingress[0].ip}'`,
+        { encoding: 'utf-8', timeout: 5000 }
+      ).trim();
+      
+      serviceIP = serviceOutput || 'Pending';
+    } catch (error) {
+      console.error('Error fetching service IP:', error.message);
+    }
+
+    res.json({
+      platform: 'GKE',
+      cluster: {
+        name: clusterName,
+        namespace: namespace,
+        zone: process.env.GCP_ZONE || 'us-central1-a'
+      },
+      service: {
+        name: 'gcp-compare-service',
+        externalIP: serviceIP,
+        port: 80
+      },
+      pods: pods,
+      nodes: nodes,
+      summary: {
+        totalPods: pods.length,
+        readyPods: pods.filter(p => p.status === 'Running').length,
+        totalNodes: nodes.length
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching cluster status:', error);
+    res.status(500).json({
+      error: 'Failed to fetch cluster status',
+      message: error.message
+    });
+  }
 });
 
 // Error handling
