@@ -16,13 +16,20 @@
     "load-test:compare": "node load-test-comparison.js",
     "load-test:custom": "node load-test.js"
   },
-  "keywords": ["gcp", "gke", "gae", "comparison", "kubernetes"],
+  "keywords": [
+    "gcp",
+    "gke",
+    "gae",
+    "comparison",
+    "kubernetes"
+  ],
   "author": "",
   "license": "ISC",
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@kubernetes/client-node": "^0.20.0",
     "express": "^5.2.1"
   }
 }

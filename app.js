@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const os = require('os');
+const k8s = require('@kubernetes/client-node');
 const app = express();
 
 // Simple metrics collection
@@ -257,6 +258,127 @@ app.get('/api/metrics', (req, res) => {
     loadDistribution: metrics.instanceRequests,
     totalRequests: metrics.requestCount
   });
+});
+
+// Cluster status endpoint
+app.get('/api/cluster-status', (req, res) => {
+  const isKubernetes = process.env.KUBERNETES_SERVICE_HOST;
+  
+  if (!isKubernetes) {
+    // Not running in Kubernetes, return GAE-style info
+    return res.json({
+      platform: 'GAE',
+      warning: 'App Engine hides individual instance IPs behind a managed load balancer',
+      deployment: {
+        type: 'App Engine',
+        region: process.env.GAE_REGION || 'us-central1',
+        versionId: process.env.GAE_VERSION || 'unknown',
+        serviceId: process.env.GAE_SERVICE || 'default'
+      },
+      message: 'View detailed metrics and logs in Google Cloud Console',
+      consoleUrl: 'https://console.cloud.google.com/appengine'
+    });
+  }
+
+  // Running on GKE - use Kubernetes client
+  (async () => {
+    try {
+      const kc = new k8s.KubeConfig();
+      kc.loadFromCluster();
+      
+      const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
+      const k8sAppsApi = kc.makeApiClient(k8s.AppsV1Api);
+      
+      const namespace = process.env.POD_NAMESPACE || 'default';
+      const clusterName = process.env.CLUSTER_NAME || 'gcp-compare-cluster';
+      
+      let pods = [];
+      let nodes = [];
+      let serviceIP = 'Pending';
+
+      // Get pods
+      try {
+        const podsResponse = await k8sApi.listNamespacedPod(namespace, undefined, undefined, undefined, undefined, 'app=gcp-compare');
+        pods = podsResponse.body.items.map(pod => ({
+          name: pod.metadata.name,
+          podIP: pod.status.podIP || 'N/A',
+          nodeName: pod.spec.nodeName || 'unknown',
+          status: pod.status.phase || 'unknown'
+        }));
+      } catch (error) {
+        console.error('Error fetching pods:', error.message);
+      }
+
+      // Get nodes
+      try {
+        const nodesResponse = await k8sApi.listNode();
+        nodes = nodesResponse.body.items.map(node => {
+          const internalIP = node.status.addresses.find(addr => addr.type === 'InternalIP')?.address || 'N/A';
+          return {
+            name: node.metadata.name,
+            internalIP: internalIP
+          };
+        });
+      } catch (error) {
+        console.error('Error fetching nodes:', error.message);
+      }
+
+      // Get service external IP
+      try {
+        const serviceResponse = await k8sApi.readNamespacedService('gcp-compare-service', namespace);
+        const ingresses = serviceResponse.body.status.loadBalancer?.ingress || [];
+        serviceIP = ingresses[0]?.ip || 'Pending';
+      } catch (error) {
+        console.error('Error fetching service:', error.message);
+      }
+
+      res.json({
+        platform: 'GKE',
+        cluster: {
+          name: clusterName,
+          namespace: namespace,
+          zone: process.env.GCP_ZONE || 'us-central1-a'
+        },
+        service: {
+          name: 'gcp-compare-service',
+          externalIP: serviceIP,
+          port: 80
+        },
+        pods: pods,
+        nodes: nodes,
+        summary: {
+          totalPods: pods.length,
+          readyPods: pods.filter(p => p.status === 'Running').length,
+          totalNodes: nodes.length
+        }
+      });
+    } catch (error) {
+      console.error('Kubernetes API error:', error.message);
+      
+      // Fallback response if Kubernetes API fails
+      res.json({
+        platform: 'GKE',
+        cluster: {
+          name: process.env.CLUSTER_NAME || 'gcp-compare-cluster',
+          namespace: process.env.POD_NAMESPACE || 'default',
+          zone: process.env.GCP_ZONE || 'us-central1-a'
+        },
+        service: {
+          name: 'gcp-compare-service',
+          externalIP: 'Pending',
+          port: 80
+        },
+        pods: [],
+        nodes: [],
+        summary: {
+          totalPods: 0,
+          readyPods: 0,
+          totalNodes: 0
+        },
+        error: 'Kubernetes API temporarily unavailable'
+      });
+    }
+  })();
 });
 
 // Error handling
